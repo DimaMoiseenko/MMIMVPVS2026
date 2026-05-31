@@ -1,0 +1,100 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+def generate_data(n=80, seed=42):
+    np.random.seed(seed)
+    x_points = np.random.uniform(-3, 7, n)
+    random_noise = np.random.normal(0, 0.3, n)
+    y_points = 0.1 * (x_points - 4) * np.cos(x_points) + 0.5 * x_points + random_noise
+    return x_points, y_points
+def get_max_gap(x_values):
+    """Вычисление Δ = max(x_{i+1} - x_i) после сортировки"""
+    sorted_x = np.sort(x_values)
+    gaps = np.diff(sorted_x)
+    return np.max(gaps)
+
+def epanechnikov_kernel(z_values):
+    """Ядро Епанечникова: K(z) = 0.75*(1-z²) при |z|≤1"""
+    condition = np.abs(z_values) <= 1
+    result = np.where(condition, 0.75 * (1 - z_values**2), 0.0)
+    return result
+def nadaraya_watson(x_query, x_train, y_train, bandwidth):
+    """Оценка Надарая-Ватсона в точке(ах) x_query"""
+    x_query = np.atleast_1d(x_query)
+    scaled_diffs = (x_query[:, np.newaxis] - x_train) / bandwidth
+    kernel_weights = epanechnikov_kernel(scaled_diffs)
+    sum_weights = np.sum(kernel_weights, axis=1, keepdims=True)
+    normalized_weights = kernel_weights / (sum_weights + 1e-12)
+    predictions = np.sum(normalized_weights * y_train, axis=1)
+    return predictions[0] if len(predictions) == 1 else predictions
+def compute_loo_error(beta_param, x_data, y_data, max_gap):
+    """Вычисление LOOCV MSE для заданного β"""
+    n_points = len(x_data)
+    bandwidth = max_gap / beta_param
+
+    loo_predictions = np.zeros(n_points)
+
+    for idx in range(n_points):
+        train_mask = np.arange(n_points) != idx
+        loo_predictions[idx] = nadaraya_watson(
+            x_data[idx],
+            x_data[train_mask],
+            y_data[train_mask],
+            bandwidth
+        )
+
+    return np.mean((y_data - loo_predictions)**2)
+
+def optimize_beta(x_data, y_data, max_gap):
+    """Перебор β ∈ [0.1, 2.0] с шагом 0.1 для поиска лучшего"""
+    beta_candidates = np.arange(0.1, 2.01, 0.1)
+    loo_errors = [compute_loo_error(b, x_data, y_data, max_gap) for b in beta_candidates]
+
+    best_index = np.argmin(loo_errors)
+    best_beta = beta_candidates[best_index]
+    best_error = loo_errors[best_index]
+
+    return best_beta, best_error, beta_candidates, loo_errors
+def main():
+    timer_start = time.time()
+
+    x_observations, y_observations = generate_data()
+    delta_gap = get_max_gap(x_observations)
+    print(f"Δ (максимальный интервал) = {delta_gap:.4f}")
+
+    optimal_beta, best_loo_mse, beta_grid, mse_values = optimize_beta(
+        x_observations, y_observations, delta_gap
+    )
+    print(f"Оптимальный β = {optimal_beta:.1f}, LOOCV MSE = {best_loo_mse:.4f}")
+
+    optimal_h = delta_gap / optimal_beta
+
+    x_dense = np.linspace(-3, 7, 500)
+    y_dense = nadaraya_watson(x_dense, x_observations, y_observations, optimal_h)
+
+    elapsed_time = time.time() - timer_start
+    print(f"Время выполнения: {elapsed_time:.3f} сек")
+    print(f"Оптимальная ширина окна h = {optimal_h:.4f}")
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(14, 6))
+
+    ax_left.scatter(x_observations, y_observations, alpha=0.7, s=30, label='Данные (n=80)')
+    ax_left.plot(x_dense, y_dense, 'r-', lw=2.5, label=f'НП регрессия (β={optimal_beta:.1f})')
+    ax_left.set_xlabel('x')
+    ax_left.set_ylabel('y')
+    ax_left.set_title('Непараметрическая регрессия (Nadaraya-Watson)')
+    ax_left.legend()
+    ax_left.grid(True, alpha=0.3)
+
+    ax_right.plot(beta_grid, mse_values, 'bo-', markersize=4)
+    ax_right.axvline(optimal_beta, color='red', linestyle='--', label=f'Лучший β = {optimal_beta:.1f}')
+    ax_right.set_xlabel('Параметр размытия ядра β')
+    ax_right.set_ylabel('MSE (leave-one-out)')
+    ax_right.set_title('Зависимость ошибки от β')
+    ax_right.legend()
+    ax_right.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+if __name__ == "__main__":
+    main()
